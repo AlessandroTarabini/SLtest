@@ -1,0 +1,8 @@
+*pdf
+*png
+*root
+inputs/htt_tt.input_*.root
+inputs/htt_tt_125_8TeV_*.txt
+ws_combine/fit_*
+ws
+combine_logger.out
