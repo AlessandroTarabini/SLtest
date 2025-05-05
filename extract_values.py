@@ -7,6 +7,7 @@ from scipy import stats
 import numpy as np
 from scipy.optimize import minimize
 from scipy.stats import moment
+import sys
 
 def coefficients(_m1, _m2ii, _m3):
     # Eq 2.9: coefficient a
@@ -24,7 +25,7 @@ def rho(_ci, _cj, _bi, _bj, _m2ij, _m2ii, _m2jj):
     rho_ii = (1/(4*_ci*_ci)) * (np.sqrt((_bi*_bi)**2 + 8*_ci*_ci*_m2ii) - _bi*_bi)
     rho_jj = (1/(4*_cj*_cj)) * (np.sqrt((_bj*_bj)**2 + 8*_cj*_cj*_m2jj) - _bj*_bj)
     rho_ij = (1/(4*_ci*_cj)) * (np.sqrt((_bi*_bj)**2 + 8*_ci*_cj*_m2ij) - _bi*_bj)
-
+    
     # Create 2x2 matrix
     rho_matrix = np.array([[rho_ii, rho_ij],
                            [rho_ij, rho_jj]])  # Note: rho_ji = rho_ij (symmetric matrix)
@@ -37,9 +38,10 @@ def chi(x, _a_high, _b_high, _c_high, _a_low, _b_low, _c_low, _rho):
     chi_high_meas = (np.sqrt(_b_high**2 - 4*(_a_high-1.821)*_c_high) - _b_high) / (2*_c_high)
     chi_low_meas = (np.sqrt(_b_low**2 - 4*(_a_low-0.803)*_c_low) - _b_low) / (2*_c_low)
 
-    chi_vector = np.array([[chi_high_meas - chi_high],
-                           [chi_low_meas - chi_low]])
-    return chi_vector.T @ _rho @ chi_vector
+    chi_vector = np.array([[chi_high - chi_high_meas],
+                           [chi_low - chi_low_meas]])
+
+    return chi_vector.T @ np.linalg.inv(_rho) @ chi_vector
 
 def find_crossings(x_vals, y_vals, threshold=1.0):
     # Find where the difference changes sign
@@ -126,6 +128,7 @@ res = minimize(chi, x0, args=(a_high, b_high, c_high, a_low, b_low, c_low, rho_h
 
 # Get optimal values from minimization
 optimal_x0, optimal_x1 = res.x
+print(optimal_x0, optimal_x1)
 
 # Create a grid of points
 x0_0_range = np.linspace(-10, 10, 100)  # Adjust range as needed
@@ -149,7 +152,45 @@ crossings_x1 = find_crossings(x0_1_range, chi_x1_scan)
 print('crossings_x0', crossings_x0-optimal_x0)
 print('crossings_x1', crossings_x1-optimal_x1)
 
-# Create plots
+#### Reconstruct the likelihood with the hessian
+# Extract hessian covariance matrix
+with uproot.open("robustHesse.hessian.root") as file:
+    matrix = file["h_covariance"]
+
+    # Get the axis labels to find indices for r_low and r_high
+    axis_labels = matrix.axes[0].labels()  # assuming both axes have same labels
+
+    # Find indices for r_low and r_high
+    r_low_idx = axis_labels.index("r_low")
+    r_high_idx = axis_labels.index("r_high")
+    
+    # Extract 2x2 submatrix for r_low and r_high
+    indices = [r_high_idx, r_low_idx]
+    hessian = matrix.values()[indices][:, indices]
+    print(hessian)
+
+mu_high_scan = np.linspace(-10, 10, 100)  # adjust range and points as needed
+mu_low_scan = np.linspace(-10, 10, 100)   # adjust range and points as needed
+
+# Scan mu_high with mu_low fixed to 1
+nll_scan_high = []
+mu_low_fixed = 0.803
+for mu_h in mu_high_scan:
+    mu_vector = np.array([[mu_h - 1.821],
+                         [mu_low_fixed - 0.803]])
+    nll = mu_vector.T @ np.linalg.inv(hessian) @ mu_vector
+    nll_scan_high.append(float(nll))
+
+# Scan mu_low with mu_high fixed to 1
+nll_scan_low = [] 
+mu_high_fixed = 1.821
+for mu_l in mu_low_scan: 
+    mu_vector = np.array([[mu_high_fixed - 1.821],
+                         [mu_l - 0.803]])
+    nll = mu_vector.T @ np.linalg.inv(hessian) @ mu_vector
+    nll_scan_low.append(float(nll))
+    
+#### Plotting
 plt.style.use(hep.style.CMS)
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
 
@@ -162,6 +203,7 @@ with uproot.open("scan_ggH_high.root") as file:
     x0_points = graph.member("fX")  # Gets x values
     y0_points = graph.member("fY")  # Gets y values
 ax1.plot(x0_points, y0_points, 'r--', label='Combine likelihood')
+ax1.plot(mu_high_scan, nll_scan_high, 'g--', label='Simplified hessian likelihood')
 ax1.set_xlabel('r_high')
 ax1.set_ylabel('2ΔNLL')
 ax1.grid(True)
@@ -178,6 +220,7 @@ with uproot.open("scan_ggH_low.root") as file:
     x0_points = graph.member("fX")  # Gets x values
     y0_points = graph.member("fY")  # Gets y values
 ax2.plot(x0_points, y0_points, 'r--', label='Combine likelihood')
+ax2.plot(mu_low_scan, nll_scan_low, 'g--', label='Simplified hessian likelihood')
 ax2.set_xlabel('r_low')
 ax2.set_ylabel('2ΔNLL')
 ax2.grid(True)
